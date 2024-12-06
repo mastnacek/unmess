@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# Lokalizace složky "Dokumenty" nebo "Documents"
+get_documents_folder() {
+    local lang=$(locale | grep LANG | cut -d= -f2 | cut -d_ -f1)
+    case "$lang" in
+        cs) echo "$HOME/Dokumenty" ;;
+        en) echo "$HOME/Documents" ;;
+        *) echo "$HOME/Documents" ;;  # Výchozí složka, pokud není jazyk rozpoznán
+    esac
+}
+
+BASE_DIR=$(get_documents_folder)/PARA
+
+# Funkce pro zobrazení nápovědy
+show_help() {
+    echo "Použití: presun [-p | -o | -z | -a] [-n] <soubory...>"
+    echo "Možnosti:"
+    echo "  -p    Přesun do složky Projekty"
+    echo "  -o    Přesun do složky Oblasti"
+    echo "  -z    Přesun do složky Zdroje"
+    echo "  -a    Přesun do složky Archiv"
+    echo "  -n    Testovací režim (nezmění žádné soubory)"
+    echo "  -h    Zobrazit tuto nápovědu"
+    exit 0
+}
+
+# Inicializace přepínačů
+dry_run=false
+SUB_DIR=""
+while getopts "pozanh" opt; do
+    case "$opt" in
+        p) SUB_DIR="Projekty" ;;
+        o) SUB_DIR="Oblasti" ;;
+        z) SUB_DIR="Zdroje" ;;
+        a) SUB_DIR="Archiv" ;;
+        n) dry_run=true ;;
+        h) show_help ;;
+        *) echo "Neplatný přepínač." && exit 1 ;;
+    esac
+done
+
+shift $((OPTIND - 1))
+
+# Ověření, že byly zadány soubory
+if [ "$#" -lt 1 ]; then
+    echo "Použití: presun [-p | -o | -z | -a] [-n] <soubory...>"
+    exit 1
+fi
+
+FILES=("$@")  # Uložit všechny soubory jako pole
+
+# Kontrola a vytvoření základních složek, pokud neexistují
+for folder in Projekty Oblasti Zdroje Archiv; do
+    if [ ! -d "$BASE_DIR/$folder" ]; then
+        mkdir -p "$BASE_DIR/$folder"
+    fi
+done
+
+# Pokud nebyl přepínač zadán, nabídněte výběr základní složky
+if [ -z "$SUB_DIR" ]; then
+    echo "Vyberte základní složku:"
+    echo "1) Projekty"
+    echo "2) Oblasti"
+    echo "3) Zdroje"
+    echo "4) Archiv"
+
+    read -p "Vaše volba (1-4): " BASE_CHOICE
+
+    case $BASE_CHOICE in
+        1) SUB_DIR="Projekty" ;;
+        2) SUB_DIR="Oblasti" ;;
+        3) SUB_DIR="Zdroje" ;;
+        4) SUB_DIR="Archiv" ;;
+        *) echo "Neplatná volba." && exit 1 ;;
+    esac
+fi
+
+# Zpracování každého souboru
+for FILE_NAME in "${FILES[@]}"; do
+    if [ ! -f "$FILE_NAME" ]; then
+        echo "Soubor '$FILE_NAME' neexistuje, přeskočeno."
+        continue
+    fi
+
+    # Získání seznamu podsložek
+    SUBFOLDERS=($(find "$BASE_DIR/$SUB_DIR" -mindepth 1 -maxdepth 1 -type d | sed "s|$BASE_DIR/$SUB_DIR/||"))
+
+    echo "Vyberte podsložku:"
+    for i in "${!SUBFOLDERS[@]}"; do
+        echo "$((i + 1))) ${SUBFOLDERS[$i]}"
+    done
+    echo "$(( ${#SUBFOLDERS[@]} + 1 ))) Vytvořit novou podsložku"
+
+    read -p "Vaše volba (1 až $(( ${#SUBFOLDERS[@]} + 1 ))): " SUB_CHOICE
+
+    if [ "$SUB_CHOICE" -gt 0 ] && [ "$SUB_CHOICE" -le "${#SUBFOLDERS[@]}" ]; then
+        FINAL_DIR="$BASE_DIR/$SUB_DIR/${SUBFOLDERS[$((SUB_CHOICE - 1))]}"
+    elif [ "$SUB_CHOICE" -eq $(( ${#SUBFOLDERS[@]} + 1 )) ]; then
+        read -p "Zadejte název nové podsložky: " NEW_SUBFOLDER
+        FINAL_DIR="$BASE_DIR/$SUB_DIR/$NEW_SUBFOLDER"
+        mkdir -p "$FINAL_DIR"
+    else
+        echo "Neplatná volba." && continue
+    fi
+
+    # Detekce konfliktu názvů
+    if [ -f "$FINAL_DIR/$FILE_NAME" ]; then
+        echo "Soubor '$FILE_NAME' již existuje v cílové složce."
+        echo "1) Přepsat"
+        echo "2) Přeskočit"
+        echo "3) Přejmenovat"
+        read -p "Vaše volba (1-3): " conflict_choice
+        case $conflict_choice in
+            1) [ "$dry_run" == "false" ] && mv -f "$FILE_NAME" "$FINAL_DIR" ;;
+            2) echo "Soubor přeskočen." && continue ;;
+            3)
+                read -p "Zadejte nový název: " new_name
+                [ "$dry_run" == "false" ] && mv "$FILE_NAME" "$FINAL_DIR/$new_name"
+                ;;
+            *) echo "Neplatná volba." && continue ;;
+        esac
+    else
+        if [ "$dry_run" == "true" ]; then
+            echo "[DRY-RUN] Přesunul bych '$FILE_NAME' do '$FINAL_DIR'."
+        else
+            mv "$FILE_NAME" "$FINAL_DIR"
+            echo "Soubor '$FILE_NAME' byl přesunut do '$FINAL_DIR'."
+        fi
+    fi
+done
